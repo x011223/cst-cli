@@ -1,0 +1,75 @@
+# ==========================================
+# Golang CLI 项目 .gitignore 模板
+# ==========================================
+
+# ---------- 编译产物 ----------
+# go build 产生的二进制 / 动态库
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# go test -c 产生的测试二进制
+*.test
+
+# 覆盖率 / 性能分析输出
+*.out
+*.coverprofile
+*.prof
+coverage.html
+
+# 常见构建输出目录（make / goreleaser 等）
+/bin/
+/build/
+/dist/
+/out/
+release/
+
+# 项目自身的二进制（替换成你的 CLI 名字）
+# mycli
+# mycli-*
+
+# ---------- Go 工具链 ----------
+# 多模块工作区文件（单模块项目一般不提交）
+go.work
+go.work.sum
+
+# 依赖目录：不使用 vendor 时保持忽略；若用 vendor 管理依赖，请注释掉并提交
+vendor/
+
+# ---------- 调试 ----------
+# delve / VS Code Go 调试器产物
+__debug_bin
+__debug_bin*
+debug
+
+# ---------- 环境变量与敏感信息 ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- IDE / 编辑器 ----------
+# JetBrains (GoLand)
+.idea/
+*.iml
+
+# VS Code
+# .vscode/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 日志与临时文件 ----------
+*.log
+tmp/
+temp/
