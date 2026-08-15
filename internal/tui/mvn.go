@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"fmt"
@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+
+	"github.com/wujunqiang/cst-cli/internal/maven"
 )
 
 type state int
@@ -21,32 +22,28 @@ const (
 // projectStatus tracks the live build status of one project.
 type projectStatus struct {
 	name        string
-	phase       Phase
+	phase       maven.Phase
 	completed   int // number of successfully finished phases (0..3)
 	running     bool
 	done        bool
 	failed      bool
-	failedPhase Phase
-	out         string
+	failedPhase maven.Phase
 }
 
 type model struct {
 	state    state
-	projects []Project
+	projects []maven.Project
 	cursor   int
 	selected map[int]bool
 	statuses []projectStatus
 	doneCnt  int
-	results  []BuildResult
+	results  []maven.BuildResult
 	ch       chan tea.Msg
 	err      error
 }
 
 func initialModel() model {
-	return model{
-		state:    stateSelect,
-		selected: map[int]bool{},
-	}
+	return model{state: stateSelect, selected: map[int]bool{}}
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -66,9 +63,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		st := &m.statuses[msg.idx]
 		st.phase = msg.phase
 		st.running = msg.running
-		if !msg.running && msg.out != "" {
-			st.out = msg.out
-		}
 		if !msg.running && msg.failed {
 			st.failed = true
 			st.failedPhase = msg.phase
@@ -116,7 +110,7 @@ func (m model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected[i] = false
 		}
 	case "enter":
-		var chosen []Project
+		var chosen []maven.Project
 		for i, p := range m.projects {
 			if m.selected[i] {
 				chosen = append(chosen, p)
@@ -130,7 +124,7 @@ func (m model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) startBuilds(chosen []Project) (tea.Model, tea.Cmd) {
+func (m model) startBuilds(chosen []maven.Project) (tea.Model, tea.Cmd) {
 	m.state = stateRunning
 	m.statuses = make([]projectStatus, len(chosen))
 	for i, p := range chosen {
@@ -138,9 +132,9 @@ func (m model) startBuilds(chosen []Project) (tea.Model, tea.Cmd) {
 	}
 	m.ch = make(chan tea.Msg, 64)
 	go func() {
-		results := RunBuilds(chosen,
-			func(idx int, phase Phase, running bool, out string, failed bool) {
-				m.ch <- phaseMsg{idx: idx, phase: phase, running: running, out: out, failed: failed}
+		results := maven.RunBuilds(chosen,
+			func(idx int, phase maven.Phase, running bool, out string, failed bool) {
+				m.ch <- phaseMsg{idx: idx, phase: phase, running: running, failed: failed}
 			},
 			func(idx int) {
 				m.ch <- doneMsg{idx: idx}
@@ -185,11 +179,7 @@ func (m model) viewSelect() string {
 		if i == m.cursor {
 			cursor = cursorStyle("❯ ")
 		}
-		if m.selected[i] {
-			b.WriteString(cursor + checkStyle("[x] ") + projStyle(p.Name) + "\n")
-		} else {
-			b.WriteString(cursor + dimStyle("[ ] ") + projStyle(p.Name) + "\n")
-		}
+		b.WriteString(cursor + CheckBox(m.selected[i]) + " " + projStyle(p.Name) + "\n")
 	}
 
 	count := 0
@@ -199,35 +189,20 @@ func (m model) viewSelect() string {
 		}
 	}
 	b.WriteString("\n" + helpStyle("↑/↓ or k/j move   space toggle   a all   n none   enter run   q quit") + "\n")
-	b.WriteString(fmt.Sprintf("\n%s %s\n", cursorStyle("▶"), checkStyle(fmt.Sprintf("%d project(s) selected — press enter to build", count))))
+	b.WriteString("\n" + cursorStyle("▶") + " " + checkStyle(fmt.Sprintf("%d project(s) selected — press enter to build", count)) + "\n")
 	return b.String()
 }
 
 func (m model) viewRunning() string {
 	total := len(m.statuses)
 	var b strings.Builder
-	b.WriteString(titleStyle("Building") + "  " + progressBar(m.doneCnt, total, 24) + "\n")
+	b.WriteString(titleStyle("Building") + "  " + ProgressBar(m.doneCnt, total, 24) + "\n")
 	b.WriteString(dimStyle(fmt.Sprintf("Overall: %d/%d projects complete", m.doneCnt, total)) + "\n\n")
 	for _, st := range m.statuses {
-		bar := progressBar(st.completed, len(Phases), 10)
-		b.WriteString(fmt.Sprintf(" %s %-26s %s %s\n", iconFor(st), projStyle(st.name), bar, labelFor(st)))
+		b.WriteString(fmt.Sprintf(" %s %-26s %s %s\n", iconFor(st), projStyle(st.name), ProgressBar(st.completed, len(maven.Phases), 10), labelFor(st)))
 	}
 	b.WriteString("\n" + helpStyle("Press q to quit.") + "\n")
 	return b.String()
-}
-
-// progressBar renders a fixed-width colored progress bar using block glyphs.
-func progressBar(done, total, width int) string {
-	if total <= 0 {
-		return "[" + dimStyle(strings.Repeat("·", width)) + "]"
-	}
-	if done > total {
-		done = total
-	}
-	filled := width * done / total
-	donePart := lipgloss.NewStyle().Foreground(cyan).Render(strings.Repeat("█", filled))
-	restPart := lipgloss.NewStyle().Faint(true).Render(strings.Repeat("░", width-filled))
-	return "[" + donePart + restPart + "]"
 }
 
 func (m model) viewDone() string {
@@ -238,8 +213,7 @@ func (m model) viewDone() string {
 	b.WriteString(titleStyle("Build complete") + "\n\n")
 	for _, r := range m.results {
 		if r.FailedAt == "" {
-			b.WriteString(successStyle("✓ "+r.Project.Name) +
-				dimStyle("  clean, compile, package all succeeded") + "\n")
+			b.WriteString(successStyle("✓ "+r.Project.Name) + dimStyle("  clean, compile, package all succeeded") + "\n")
 			continue
 		}
 		b.WriteString(failStyle(fmt.Sprintf("✗ %s  failed at %s", r.Project.Name, r.FailedAt)) + "\n")
@@ -254,43 +228,6 @@ func (m model) viewDone() string {
 	b.WriteString(helpStyle("Press q to quit.") + "\n")
 	return b.String()
 }
-
-type phaseMsg struct {
-	idx     int
-	phase   Phase
-	running bool
-	out     string
-	failed  bool
-}
-
-type doneMsg struct{ idx int }
-type errMsg struct{ err error }
-
-// Styles used to render the TUI.
-var (
-	accent = lipgloss.Color("205")
-	green  = lipgloss.Color("46")
-	red    = lipgloss.Color("196")
-	yellow = lipgloss.Color("214")
-	cyan   = lipgloss.Color("51")
-
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(accent).Render
-	helpStyle   = lipgloss.NewStyle().Faint(true).Render
-	cursorStyle = lipgloss.NewStyle().Foreground(accent).Bold(true).Render
-	checkStyle  = lipgloss.NewStyle().Foreground(green).Render
-	dimStyle    = lipgloss.NewStyle().Faint(true).Render
-	projStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render
-
-	successStyle = lipgloss.NewStyle().Foreground(green).Bold(true).Render
-	failStyle    = lipgloss.NewStyle().Foreground(red).Bold(true).Render
-	runningStyle = lipgloss.NewStyle().Foreground(yellow).Render
-
-	errorBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(red).
-			Padding(0, 1).
-			Foreground(lipgloss.Color("252"))
-)
 
 func iconFor(st projectStatus) string {
 	switch {
@@ -318,13 +255,23 @@ func labelFor(st projectStatus) string {
 	}
 }
 
+type phaseMsg struct {
+	idx     int
+	phase   maven.Phase
+	running bool
+	failed  bool
+}
+
+type doneMsg struct{ idx int }
+type errMsg struct{ err error }
+
 // RunMvnBuild launches the interactive Maven build subcommand.
 func RunMvnBuild() error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	projects, err := FindMavenProjects(dir)
+	projects, err := maven.FindMavenProjects(dir)
 	if err != nil {
 		return err
 	}
