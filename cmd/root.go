@@ -21,5 +21,6 @@ func Execute() error {
 
 func init() {
 	rootCmd.AddCommand(mvnCmd)
+	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(versionCmd)
 }

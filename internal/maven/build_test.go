@@ -35,7 +35,7 @@ func TestRunBuildsReportsFailure(t *testing.T) {
 		os.WriteFile(filepath.Join(p, "pom.xml"), []byte("<project></project>"), 0644)
 	}
 	ps, _ := FindMavenProjects(dir)
-	res := RunBuilds(ps, func(int, Phase, bool, string, bool) {}, func(int) {})
+	res := RunBuilds(ps, "", func(int, Phase, bool, string, bool) {}, func(int) {})
 	for _, r := range res {
 		if r.FailedAt == "" {
 			t.Errorf("%s should have failed (no valid maven build)", r.Project.Name)

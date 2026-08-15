@@ -35,10 +35,12 @@ type BuildResult struct {
 }
 
 // RunBuilds runs the selected projects' builds. Projects run in parallel, and
-// within a project the three phases run serially. Progress is reported via the
-// onPhase callback (running=false with failed=true means the phase errored, and
-// out holds the Maven output); final results are returned.
-func RunBuilds(projects []Project, onPhase func(projectIndex int, phase Phase, running bool, out string, failed bool), onDone func(projectIndex int)) []BuildResult {
+// within a project the three phases run serially. The given profile is passed
+// to Maven via -P (e.g. "dev"/"prod"); an empty profile activates the default.
+// Progress is reported via the onPhase callback (running=false with failed=true
+// means the phase errored, and out holds the Maven output); final results are
+// returned.
+func RunBuilds(projects []Project, profile string, onPhase func(projectIndex int, phase Phase, running bool, out string, failed bool), onDone func(projectIndex int)) []BuildResult {
 	results := make([]BuildResult, len(projects))
 	var wg sync.WaitGroup
 	for i, p := range projects {
@@ -48,7 +50,7 @@ func RunBuilds(projects []Project, onPhase func(projectIndex int, phase Phase, r
 			res := BuildResult{Project: proj}
 			for _, phase := range Phases {
 				onPhase(idx, phase, true, "", false)
-				out, err := runMaven(proj.Path, string(phase))
+				out, err := runMaven(proj.Path, string(phase), profile)
 				failed := err != nil
 				res.Results = append(res.Results, PhaseResult{Phase: phase, Err: err, Out: out})
 				onPhase(idx, phase, false, out, failed)
@@ -65,11 +67,16 @@ func RunBuilds(projects []Project, onPhase func(projectIndex int, phase Phase, r
 	return results
 }
 
-// runMaven executes `mvn <phase>` in the given project directory and returns
-// the combined output. On failure the output (including the Maven error) is
-// returned alongside the error so callers can display it.
-func runMaven(dir, phase string) (string, error) {
-	cmd := exec.Command("mvn", "-B", phase)
+// runMaven executes `mvn -B [-P<profile>] <phase>` in the given project
+// directory and returns the combined output. On failure the output (including
+// the Maven error) is returned alongside the error so callers can display it.
+func runMaven(dir, phase, profile string) (string, error) {
+	args := []string{"-B"}
+	if profile != "" {
+		args = append(args, "-P"+profile)
+	}
+	args = append(args, phase)
+	cmd := exec.Command("mvn", args...)
 	cmd.Dir = dir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

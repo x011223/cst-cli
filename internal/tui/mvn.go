@@ -14,10 +14,15 @@ import (
 type state int
 
 const (
-	stateSelect state = iota
+	stateEnv state = iota
+	stateSelect
 	stateRunning
 	stateDone
 )
+
+// envOptions is the list of build environments (Maven profiles) selectable
+// before a build. Add entries here to support more environments (e.g. test, cdp).
+var envOptions = []string{"dev", "test", "prod"}
 
 // projectStatus tracks the live build status of one project.
 type projectStatus struct {
@@ -31,19 +36,27 @@ type projectStatus struct {
 }
 
 type model struct {
-	state    state
-	projects []maven.Project
-	cursor   int
-	selected map[int]bool
-	statuses []projectStatus
-	doneCnt  int
-	results  []maven.BuildResult
-	ch       chan tea.Msg
-	err      error
+	state     state
+	env       string
+	envCursor int
+	projects  []maven.Project
+	cursor    int
+	selected  map[int]bool
+	statuses  []projectStatus
+	doneCnt   int
+	results   []maven.BuildResult
+	ch        chan tea.Msg
+	err       error
 }
 
-func initialModel() model {
-	return model{state: stateSelect, selected: map[int]bool{}}
+func initialModel(env string) model {
+	m := model{selected: map[int]bool{}, env: env}
+	if env != "" {
+		m.state = stateSelect // preset env, skip the env screen
+	} else {
+		m.state = stateEnv
+	}
+	return m
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -52,6 +65,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch m.state {
+		case stateEnv:
+			return m.updateEnv(msg)
 		case stateSelect:
 			return m.updateSelect(msg)
 		case stateDone:
@@ -71,16 +86,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.listen()
 	case doneMsg:
+		// a project finished; only update progress here. The final result
+		// slice is delivered via buildDoneMsg to avoid a data race.
 		m.statuses[msg.idx].done = true
 		m.doneCnt++
-		if m.doneCnt == len(m.statuses) {
-			m.state = stateDone
-			return m, nil
-		}
 		return m, m.listen()
+	case buildDoneMsg:
+		// results arrive on the main goroutine, so the done view can rely on
+		// m.results being fully populated.
+		m.results = msg.results
+		m.state = stateDone
+		return m, nil
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) updateEnv(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c", "esc":
+		return m, tea.Quit
+	case "up", "k":
+		if m.envCursor > 0 {
+			m.envCursor--
+		}
+	case "down", "j":
+		if m.envCursor < len(envOptions)-1 {
+			m.envCursor++
+		}
+	case "enter", " ":
+		m.env = envOptions[m.envCursor]
+		m.state = stateSelect
 	}
 	return m, nil
 }
@@ -132,14 +170,14 @@ func (m model) startBuilds(chosen []maven.Project) (tea.Model, tea.Cmd) {
 	}
 	m.ch = make(chan tea.Msg, 64)
 	go func() {
-		results := maven.RunBuilds(chosen,
+		results := maven.RunBuilds(chosen, m.env,
 			func(idx int, phase maven.Phase, running bool, out string, failed bool) {
 				m.ch <- phaseMsg{idx: idx, phase: phase, running: running, failed: failed}
 			},
 			func(idx int) {
 				m.ch <- doneMsg{idx: idx}
 			})
-		m.results = results
+		m.ch <- buildDoneMsg{results: results}
 	}()
 	return m, m.listen()
 }
@@ -153,6 +191,8 @@ func (m model) listen() tea.Cmd {
 
 func (m model) View() string {
 	switch m.state {
+	case stateEnv:
+		return m.viewEnv()
 	case stateSelect:
 		return m.viewSelect()
 	case stateRunning:
@@ -163,10 +203,25 @@ func (m model) View() string {
 	return ""
 }
 
+func (m model) viewEnv() string {
+	var b strings.Builder
+	b.WriteString(titleStyle("Select build environment") + "\n")
+	b.WriteString(dimStyle("maps to the Maven profile (-P<env>) used for the build") + "\n\n")
+	for i, e := range envOptions {
+		cursor := "  "
+		if i == m.envCursor {
+			cursor = cursorStyle("❯ ")
+		}
+		b.WriteString(cursor + projStyle(e) + "\n")
+	}
+	b.WriteString("\n" + helpStyle("↑/↓ or k/j move   enter select   q quit") + "\n")
+	return b.String()
+}
+
 func (m model) viewSelect() string {
 	var b strings.Builder
 	b.WriteString(titleStyle("Select Maven projects to build") + "\n")
-	b.WriteString(dimStyle("clean → compile → package  ·  parallel across projects, serial per project") + "\n\n")
+	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   clean → compile → package   ·   parallel across projects, serial per project", m.env)) + "\n\n")
 
 	if len(m.projects) == 0 {
 		b.WriteString(dimStyle("No Maven projects (folders with pom.xml) found in the current directory.") + "\n\n")
@@ -197,7 +252,7 @@ func (m model) viewRunning() string {
 	total := len(m.statuses)
 	var b strings.Builder
 	b.WriteString(titleStyle("Building") + "  " + ProgressBar(m.doneCnt, total, 24) + "\n")
-	b.WriteString(dimStyle(fmt.Sprintf("Overall: %d/%d projects complete", m.doneCnt, total)) + "\n\n")
+	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   Overall: %d/%d projects complete", m.env, m.doneCnt, total)) + "\n\n")
 	for _, st := range m.statuses {
 		b.WriteString(fmt.Sprintf(" %s %-26s %s %s\n", iconFor(st), projStyle(st.name), ProgressBar(st.completed, len(maven.Phases), 10), labelFor(st)))
 	}
@@ -209,20 +264,46 @@ func (m model) viewDone() string {
 	if m.err != nil {
 		return failStyle("Error: ") + m.err.Error() + "\n\n" + helpStyle("Press q to quit.") + "\n"
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle("Build complete") + "\n\n")
+	ok, fail := 0, 0
 	for _, r := range m.results {
 		if r.FailedAt == "" {
-			b.WriteString(successStyle("✓ "+r.Project.Name) + dimStyle("  clean, compile, package all succeeded") + "\n")
+			ok++
+		} else {
+			fail++
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(titleStyle("Build complete") + "  ")
+	if fail == 0 {
+		b.WriteString(successStyle(fmt.Sprintf("%d/%d succeeded", ok, len(m.results))))
+	} else {
+		b.WriteString(failStyle(fmt.Sprintf("%d succeeded, %d failed", ok, fail)))
+	}
+	b.WriteString("\n\n")
+
+	envLabel := m.env
+	if envLabel == "" {
+		envLabel = "default"
+	}
+	tag := dimStyle("[" + envLabel + "] ")
+	profile := ""
+	if m.env != "" {
+		profile = "-P" + m.env + " "
+	}
+	for _, r := range m.results {
+		if r.FailedAt == "" {
+			b.WriteString(successStyle("✓ "+tag+r.Project.Name) + dimStyle("  clean, compile, package all succeeded") + "\n")
 			continue
 		}
-		b.WriteString(failStyle(fmt.Sprintf("✗ %s  failed at %s", r.Project.Name, r.FailedAt)) + "\n")
+		cmd := fmt.Sprintf("mvn %s%s", profile, r.FailedAt)
+		b.WriteString(failStyle("✗ "+tag+r.Project.Name) +
+			dimStyle("   failing command: ") + failStyle(cmd) + "\n")
 		for _, pr := range r.Results {
 			if pr.Err == nil {
 				continue
 			}
-			body := fmt.Sprintf("mvn %s output:\n%s", pr.Phase, pr.Out)
-			b.WriteString(errorBoxStyle.Render(body) + "\n\n")
+			b.WriteString(errorBoxStyle.Render(mavenErrorSummary(pr.Out)) + "\n\n")
 		}
 	}
 	b.WriteString(helpStyle("Press q to quit.") + "\n")
@@ -263,13 +344,71 @@ type phaseMsg struct {
 }
 
 type doneMsg struct{ idx int }
+type buildDoneMsg struct{ results []maven.BuildResult }
 type errMsg struct{ err error }
 
-// RunMvnBuild launches the interactive Maven build subcommand.
-func RunMvnBuild() error {
+// mavenErrorSummary extracts the most relevant error lines from raw Maven output
+// so failures are readable at a glance: it prefers the BUILD FAILURE line and the
+// [ERROR] messages, falling back to the last non-empty lines.
+func mavenErrorSummary(out string) string {
+	var errors, failure []string
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if strings.Contains(t, "BUILD FAILURE") {
+			failure = append(failure, t)
+		}
+		if strings.HasPrefix(t, "[ERROR]") {
+			e := strings.TrimSpace(strings.TrimPrefix(t, "[ERROR]"))
+			if e != "" {
+				errors = append(errors, e)
+			}
+		}
+	}
+	lines := append(failure, errors...)
+	if len(lines) == 0 {
+		// no [ERROR] markers: show the tail of the output
+		nonEmpty := []string{}
+		for _, l := range strings.Split(out, "\n") {
+			if strings.TrimSpace(l) != "" {
+				nonEmpty = append(nonEmpty, strings.TrimSpace(l))
+			}
+		}
+		if len(nonEmpty) > 8 {
+			nonEmpty = nonEmpty[len(nonEmpty)-8:]
+		}
+		lines = nonEmpty
+	}
+	if len(lines) > 12 {
+		lines = lines[:12]
+	}
+	if len(lines) == 0 {
+		return "(no output captured)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// RunMvnBuild launches the interactive Maven build subcommand. When env is
+// non-empty it is used as the Maven profile and the environment screen is
+// skipped; otherwise the user is prompted to pick one (dev/prod/...).
+func RunMvnBuild(env string) error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+	if env != "" {
+		valid := false
+		for _, e := range envOptions {
+			if e == env {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("unknown environment %q (valid: %v)", env, envOptions)
+		}
 	}
 	projects, err := maven.FindMavenProjects(dir)
 	if err != nil {
@@ -277,7 +416,7 @@ func RunMvnBuild() error {
 	}
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
 
-	m := initialModel()
+	m := initialModel(env)
 	m.projects = projects
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
