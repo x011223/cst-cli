@@ -437,9 +437,11 @@ func (m umodel) uViewConfirmRestart() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(titleStyle("Restart docker services?") + "\n")
+	b.WriteString(restartRecordLine(0, 0, len(m.toRestart)) + "\n")
 	b.WriteString(dimStyle(fmt.Sprintf("one at a time on %s, wait %s after each", m.env.Host, upload.RestartPause)) + "\n\n")
-	for _, s := range m.toRestart {
-		b.WriteString(projStyle("● "+s.Name) + dimStyle(fmt.Sprintf("  docker restart %s\n", s.Container)))
+	for i, s := range m.toRestart {
+		idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, len(m.toRestart)))
+		b.WriteString(fmt.Sprintf(" %s %s  %s\n", idx, projStyle(s.Name), dimStyle("docker restart "+s.Container)))
 	}
 	if len(m.unmatched) > 0 {
 		b.WriteString("\n" + dimStyle("no mapping in deploy.yaml:") + "\n")
@@ -452,10 +454,12 @@ func (m umodel) uViewConfirmRestart() string {
 }
 
 func (m umodel) uViewRestarting() string {
+	ok, fail, total := liveRestartCounts(m.rstStatuses)
 	var b strings.Builder
-	b.WriteString(titleStyle("Restarting docker") + "  " + ProgressBar(m.rstDoneCnt, len(m.rstStatuses), 24) + "\n")
+	b.WriteString(titleStyle("Restarting docker") + "  " + ProgressBar(ok+fail, total, 24) + "\n")
+	b.WriteString(restartRecordLine(ok, fail, total) + "\n")
 	b.WriteString(dimStyle(fmt.Sprintf("on %s@%s — one at a time, wait %s after each", m.env.User, m.env.Host, upload.RestartPause)) + "\n\n")
-	for _, st := range m.rstStatuses {
+	for i, st := range m.rstStatuses {
 		icon := " "
 		label := dimStyle("pending")
 		switch {
@@ -472,7 +476,8 @@ func (m umodel) uViewRestarting() string {
 			icon = runningStyle("●")
 			label = runningStyle("docker restart")
 		}
-		b.WriteString(fmt.Sprintf(" %s %-24s %s  %s\n", icon, projStyle(st.svc.Name), dimStyle(st.svc.Container), label))
+		idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, total))
+		b.WriteString(fmt.Sprintf(" %s %s %-24s %s  %s\n", idx, icon, projStyle(st.svc.Name), dimStyle(st.svc.Container), label))
 	}
 	b.WriteString("\n" + helpStyle("Please wait…") + "\n")
 	return b.String()
@@ -520,18 +525,15 @@ func (m umodel) uViewDone() string {
 				rfail++
 			}
 		}
-		b.WriteString(titleStyle("Docker restart") + "  ")
-		if rfail == 0 {
-			b.WriteString(successStyle(fmt.Sprintf("%d/%d restarted", rok, len(m.rstResults))))
-		} else {
-			b.WriteString(failStyle(fmt.Sprintf("%d restarted, %d failed", rok, rfail)))
-		}
-		b.WriteString("\n\n")
+		b.WriteString(titleStyle("Docker restart") + "\n")
+		b.WriteString(restartRecordLine(rok, rfail, len(m.rstResults)) + "\n\n")
+		total := len(m.toRestart)
 		for i, s := range m.toRestart {
+			idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, total))
 			if i < len(m.rstResults) && m.rstResults[i] != nil {
-				b.WriteString(failStyle("✗ "+s.Name) + dimStyle("  docker restart "+s.Container+"  ") + m.rstResults[i].Error() + "\n")
+				b.WriteString(fmt.Sprintf(" %s %s  %s  %s\n", idx, failStyle("✗ "+s.Name), dimStyle("docker restart "+s.Container), m.rstResults[i].Error()))
 			} else {
-				b.WriteString(successStyle("✓ "+s.Name) + dimStyle("  docker restart "+s.Container) + "\n")
+				b.WriteString(fmt.Sprintf(" %s %s  %s\n", idx, successStyle("✓ "+s.Name), dimStyle("docker restart "+s.Container)))
 			}
 		}
 	}
@@ -554,6 +556,32 @@ func uploadCounts(results []error) (ok, fail int) {
 		}
 	}
 	return ok, fail
+}
+
+func liveRestartCounts(statuses []rstStatus) (ok, fail, total int) {
+	total = len(statuses)
+	for _, st := range statuses {
+		if st.failed {
+			fail++
+			continue
+		}
+		if st.done || st.waiting {
+			ok++
+		}
+	}
+	return ok, fail, total
+}
+
+func restartRecordLine(ok, fail, total int) string {
+	line := fmt.Sprintf("已重启 %d / 共 %d", ok, total)
+	if fail > 0 {
+		return titleStyle("重启记录") + "  " + failStyle(line) + "  " + failStyle(fmt.Sprintf("失败 %d", fail))
+	}
+	style := successStyle
+	if ok == 0 && total > 0 {
+		style = dimStyle
+	}
+	return titleStyle("重启记录") + "  " + style(line)
 }
 
 type upFileStatus struct {

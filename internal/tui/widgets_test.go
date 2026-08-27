@@ -31,3 +31,16 @@ func TestProgressBar64Full(t *testing.T) {
 		t.Fatal("full and half bars should differ")
 	}
 }
+
+func TestLiveRestartCounts(t *testing.T) {
+	ok, fail, total := liveRestartCounts([]rstStatus{
+		{done: true},
+		{waiting: true},
+		{failed: true},
+		{running: true},
+		{},
+	})
+	if total != 5 || ok != 2 || fail != 1 {
+		t.Fatalf("got ok=%d fail=%d total=%d, want 2 1 5", ok, fail, total)
+	}
+}
