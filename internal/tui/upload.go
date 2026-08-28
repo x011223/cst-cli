@@ -10,7 +10,6 @@ import (
 
 	"github.com/wujunqiang/cst-cli/internal/deploy"
 	"github.com/wujunqiang/cst-cli/internal/jars"
-	"github.com/wujunqiang/cst-cli/internal/maven"
 	"github.com/wujunqiang/cst-cli/internal/upload"
 )
 
@@ -41,6 +40,7 @@ type umodel struct {
 	deployCfgErr   error
 	envIdx         int
 	env            upload.Environment
+	localJarDir    string
 	pattern        string
 	jars           []jars.JarFile
 	cursor         int
@@ -58,7 +58,7 @@ type umodel struct {
 	err            error
 }
 
-func initialUModel(cfg *upload.Config, deployCfg *deploy.Config, deployCfgErr error, envName string, jarList []jars.JarFile, pattern string) umodel {
+func initialUModel(cfg *upload.Config, deployCfg *deploy.Config, deployCfgErr error, envName string, jarList []jars.JarFile, pattern, localJarDir string) umodel {
 	m := umodel{
 		state:        uStateEnv,
 		cfg:          cfg,
@@ -66,6 +66,7 @@ func initialUModel(cfg *upload.Config, deployCfg *deploy.Config, deployCfgErr er
 		deployCfgErr: deployCfgErr,
 		jars:         jarList,
 		pattern:      pattern,
+		localJarDir:  localJarDir,
 		selected:     map[int]bool{},
 	}
 	if envName != "" {
@@ -330,7 +331,7 @@ func (m umodel) View() string {
 
 func (m umodel) uViewEnv() string {
 	var b strings.Builder
-	b.WriteString(titleStyle("Select upload environment") + "\n\n")
+	b.WriteString(titleStyle("Select deploy environment") + "\n\n")
 	for i, e := range m.cfg.Environments {
 		cursor := "  "
 		if i == m.envIdx {
@@ -344,11 +345,11 @@ func (m umodel) uViewEnv() string {
 
 func (m umodel) uViewJars() string {
 	var b strings.Builder
-	b.WriteString(titleStyle("Select jars to upload") + "\n")
-	b.WriteString(dimStyle(fmt.Sprintf("environment: %s   ·   destination: %s", m.env.Name, m.env.DestDir)) + "\n")
-	b.WriteString(dimStyle(fmt.Sprintf("filter: %s", m.pattern)) + "\n\n")
+	b.WriteString(titleStyle("Select jars to deploy") + "\n")
+	b.WriteString(dimStyle(fmt.Sprintf("environment: %s   ·   remote: %s", m.env.Name, m.env.DestDir)) + "\n")
+	b.WriteString(dimStyle(fmt.Sprintf("staging: %s", m.localJarDir)) + "\n\n")
 	if len(m.jars) == 0 {
-		b.WriteString(dimStyle("No built jars found (run `cst-cli mvn` first to package the projects).") + "\n\n")
+		b.WriteString(dimStyle("No jars in the staging folder (run `cst-cli mvn` first).") + "\n\n")
 		b.WriteString(helpStyle("Press q to quit.") + "\n")
 		return b.String()
 	}
@@ -357,7 +358,11 @@ func (m umodel) uViewJars() string {
 		if i == m.cursor {
 			cursor = cursorStyle("❯ ")
 		}
-		b.WriteString(fmt.Sprintf("%s%s %s %s\n", cursor, CheckBox(m.selected[i]), projStyle(j.Name), dimStyle("("+j.Project+")")))
+		extra := ""
+		if j.Project != "" {
+			extra = jarProjectLabel(j.Project)
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s%s\n", cursor, CheckBox(m.selected[i]), projStyle(j.Name), extra))
 	}
 	count := 0
 	for _, v := range m.selected {
@@ -365,8 +370,8 @@ func (m umodel) uViewJars() string {
 			count++
 		}
 	}
-	b.WriteString("\n" + helpStyle("↑/↓ move   space toggle   a all   n none   enter upload   q quit") + "\n")
-	b.WriteString("\n" + cursorStyle("▶") + " " + checkStyle(fmt.Sprintf("%d jar(s) selected — press enter to upload", count)) + "\n")
+	b.WriteString("\n" + helpStyle("↑/↓ move   space toggle   a all   n none   enter deploy   q quit") + "\n")
+	b.WriteString("\n" + cursorStyle("▶") + " " + checkStyle(fmt.Sprintf("%d jar(s) selected — press enter to deploy", count)) + "\n")
 	return b.String()
 }
 
@@ -494,7 +499,7 @@ func (m umodel) uViewDone() string {
 		return failStyle("Error: ") + m.err.Error() + "\n\n" + helpStyle("Press q to quit.") + "\n"
 	}
 	if len(m.results) == 0 {
-		return dimStyle("No built jars found (run `cst-cli mvn` first to package the projects).") +
+		return dimStyle("No jars in the staging folder (run `cst-cli mvn` first).") +
 			"\n\n" + helpStyle("Press q to quit.") + "\n"
 	}
 	ok, fail := uploadCounts(m.results)
@@ -508,7 +513,7 @@ func (m umodel) uViewDone() string {
 	b.WriteString("\n" + dimStyle(fmt.Sprintf("to %s@%s:%d:%s", m.env.User, m.env.Host, m.env.Port, m.env.DestDir)) + "\n\n")
 	for i, e := range m.results {
 		if e == nil {
-			b.WriteString(successStyle("✓ "+m.jars[i].Name) + dimStyle("  ("+m.jars[i].Project+")") + "\n")
+			b.WriteString(successStyle("✓ "+m.jars[i].Name) + jarProjectLabel(m.jars[i].Project) + "\n")
 		} else {
 			b.WriteString(failStyle("✗ "+m.jars[i].Name) + "  " + e.Error() + "\n")
 		}
@@ -679,27 +684,60 @@ type rstMsg struct {
 	out     string
 }
 
-// RunUpload launches the interactive upload subcommand.
-func RunUpload(configPath, env, pattern, deployConfigPath string) error {
+// RunDeploy launches the interactive deploy subcommand (upload jars, then
+// optionally restart docker). Jars are listed from localJarDir.
+func RunDeploy(configPath, env, pattern, deployConfigPath string) error {
 	cfg, err := upload.LoadConfig(configPath)
 	if err != nil {
 		return err
 	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	projects, err := maven.FindMavenProjects(dir)
-	if err != nil {
-		return err
-	}
-	jarList := jars.FindJars(toJarsProjects(projects))
-	if pattern == "" {
-		pattern = jars.DefaultJarPattern
-	}
-	jarList = jars.FilterByName(jarList, jars.ParsePatterns(pattern))
 	dcfg, dErr := deploy.LoadConfig(deployConfigPath)
-	p := tea.NewProgram(initialUModel(cfg, dcfg, dErr, env, jarList, pattern), tea.WithAltScreen())
-	_, err = p.Run()
-	return err
+	localDir := deploy.ResolveLocalJarDir(dcfg)
+	jarList, err := jars.ListDir(localDir)
+	if err != nil {
+		return err
+	}
+	if pattern != "" {
+		jarList = jars.FilterByName(jarList, jars.ParsePatterns(pattern))
+	}
+	annotateJarProjects(jarList, dcfg)
+	p := tea.NewProgram(initialUModel(cfg, dcfg, dErr, env, jarList, pattern, localDir), tea.WithAltScreen())
+	final, err := p.Run()
+	if err != nil {
+		return err
+	}
+	if m, ok := final.(umodel); ok && m.uploadedOK() {
+		if cerr := jars.ClearDir(localDir); cerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: clear staging dir %s: %v\n", localDir, cerr)
+		}
+	}
+	return nil
+}
+
+func (m umodel) uploadedOK() bool {
+	for _, e := range m.results {
+		if e == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func jarProjectLabel(project string) string {
+	if project == "" {
+		return ""
+	}
+	return dimStyle("  (" + project + ")")
+}
+
+func annotateJarProjects(list []jars.JarFile, cfg *deploy.Config) {
+	if cfg == nil {
+		return
+	}
+	for i, j := range list {
+		matched, _ := cfg.MatchServices([]string{j.Name})
+		if len(matched) == 1 {
+			list[i].Project = matched[0].Name
+		}
+	}
 }

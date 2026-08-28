@@ -8,6 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/wujunqiang/cst-cli/internal/deploy"
+	"github.com/wujunqiang/cst-cli/internal/jars"
 	"github.com/wujunqiang/cst-cli/internal/maven"
 )
 
@@ -36,17 +38,20 @@ type projectStatus struct {
 }
 
 type model struct {
-	state     state
-	env       string
-	envCursor int
-	projects  []maven.Project
-	cursor    int
-	selected  map[int]bool
-	statuses  []projectStatus
-	doneCnt   int
-	results   []maven.BuildResult
-	ch        chan tea.Msg
-	err       error
+	state       state
+	env         string
+	envCursor   int
+	projects    []maven.Project
+	cursor      int
+	selected    map[int]bool
+	statuses    []projectStatus
+	doneCnt     int
+	results     []maven.BuildResult
+	localJarDir string
+	copyResults []jars.CopyResult
+	copyErr     error
+	ch          chan tea.Msg
+	err         error
 }
 
 func initialModel(env string) model {
@@ -95,6 +100,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// results arrive on the main goroutine, so the done view can rely on
 		// m.results being fully populated.
 		m.results = msg.results
+		m.copyResults, m.copyErr = stageBuiltJars(msg.results, m.localJarDir)
 		m.state = stateDone
 		return m, nil
 	case errMsg:
@@ -155,6 +161,11 @@ func (m model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if len(chosen) == 0 {
+			return m, nil
+		}
+		if err := jars.ClearDir(m.localJarDir); err != nil {
+			m.err = fmt.Errorf("clear staging dir %s: %w", m.localJarDir, err)
+			m.state = stateDone
 			return m, nil
 		}
 		return m.startBuilds(chosen)
@@ -221,7 +232,7 @@ func (m model) viewEnv() string {
 func (m model) viewSelect() string {
 	var b strings.Builder
 	b.WriteString(titleStyle("Select Maven projects to build") + "\n")
-	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   clean → compile → package   ·   parallel across projects, serial per project", m.env)) + "\n\n")
+	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   staging: %s   ·   clean → compile → package", m.env, m.localJarDir)) + "\n\n")
 
 	if len(m.projects) == 0 {
 		b.WriteString(dimStyle("No Maven projects (folders with pom.xml) found in the current directory.") + "\n\n")
@@ -306,7 +317,38 @@ func (m model) viewDone() string {
 			b.WriteString(errorBoxStyle.Render(mavenErrorSummary(pr.Out)) + "\n\n")
 		}
 	}
-	b.WriteString(helpStyle("Press q to quit.") + "\n")
+
+	b.WriteString("\n")
+	switch {
+	case m.copyErr != nil:
+		b.WriteString(failStyle("Copy to staging failed: ") + m.copyErr.Error() + "\n")
+	case len(m.copyResults) == 0:
+		b.WriteString(dimStyle(fmt.Sprintf("No *-application*.jar copied to %s", m.localJarDir)) + "\n")
+	default:
+		okc, failc := 0, 0
+		for _, r := range m.copyResults {
+			if r.Err == nil {
+				okc++
+			} else {
+				failc++
+			}
+		}
+		b.WriteString(titleStyle("Staged jars") + "  ")
+		if failc == 0 {
+			b.WriteString(successStyle(fmt.Sprintf("%d copied → %s", okc, m.localJarDir)))
+		} else {
+			b.WriteString(failStyle(fmt.Sprintf("%d copied, %d failed → %s", okc, failc, m.localJarDir)))
+		}
+		b.WriteString("\n")
+		for _, r := range m.copyResults {
+			if r.Err == nil {
+				b.WriteString(successStyle("  ✓ "+r.Jar.Name) + dimStyle("  ("+r.Jar.Project+")") + "\n")
+			} else {
+				b.WriteString(failStyle("  ✗ "+r.Jar.Name) + "  " + r.Err.Error() + "\n")
+			}
+		}
+	}
+	b.WriteString("\n" + helpStyle("Press q to quit.") + "\n")
 	return b.String()
 }
 
@@ -418,8 +460,28 @@ func RunMvnBuild(env string) error {
 
 	m := initialModel(env)
 	m.projects = projects
+	dcfg, _ := deploy.LoadConfig("")
+	m.localJarDir = deploy.ResolveLocalJarDir(dcfg)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+func stageBuiltJars(results []maven.BuildResult, dest string) ([]jars.CopyResult, error) {
+	var ok []maven.Project
+	for _, r := range results {
+		if r.FailedAt == "" {
+			ok = append(ok, r.Project)
+		}
+	}
+	if len(ok) == 0 {
+		return nil, nil
+	}
+	found := jars.FindJars(toJarsProjects(ok))
+	found = jars.FilterByName(found, jars.ParsePatterns(jars.ApplicationJarPattern))
+	if len(found) == 0 {
+		return nil, nil
+	}
+	return jars.CopyJars(found, dest)
 }

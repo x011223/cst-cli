@@ -24,6 +24,5 @@ func init() {
 	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(deployCmd)
 	rootCmd.AddCommand(jarsCmd)
-	rootCmd.AddCommand(uploadCmd)
 	rootCmd.AddCommand(versionCmd)
 }

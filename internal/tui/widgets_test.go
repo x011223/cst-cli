@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/wujunqiang/cst-cli/internal/deploy"
+	"github.com/wujunqiang/cst-cli/internal/jars"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -109,4 +110,23 @@ func dumpLines(lines []string) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func TestAnnotateJarProjects(t *testing.T) {
+	list := []jars.JarFile{
+		{Name: "signIn-application-1.0.0.jar"},
+		{Name: "unknown.jar"},
+	}
+	annotateJarProjects(list, &deploy.Config{Services: []deploy.Service{
+		{Name: "signin", Jar: "signIn-application-1.0.0.jar", Container: "commsoft-signin"},
+	}})
+	if list[0].Project != "signin" {
+		t.Fatalf("got %q, want signin", list[0].Project)
+	}
+	if list[1].Project != "" {
+		t.Fatalf("unmapped jar should stay empty, got %q", list[1].Project)
+	}
+	if jarProjectLabel("") != "" {
+		t.Fatal("empty project should render nothing")
+	}
 }

@@ -1,6 +1,5 @@
-// Package deploy implements the remote deployment workflow: rename the old jar,
-// move the newly uploaded jar into place, and restart the docker container.
-// It runs on the deployment server (no SSH); file upload is out of scope.
+// Package deploy loads the deployment descriptor: local staging folder,
+// jar-to-container mapping, and remote paths.
 package deploy
 
 import (
@@ -9,20 +8,27 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/wujunqiang/cst-cli/internal/jars"
 )
+
+// DefaultLocalJarDir is where `cst-cli mvn` copies built application jars
+// and where `cst-cli deploy` reads them from.
+const DefaultLocalJarDir = "~/Documents/Jars"
 
 // Service maps a deployable artifact to its docker container.
 type Service struct {
 	Name      string `yaml:"name"`
 	Jar       string `yaml:"jar"`       // jar file name, e.g. system-application-2.0.0.jar
-	Container string `yaml:"container"` // docker container name/tag, e.g. commsoft-system:1.0.0
+	Container string `yaml:"container"` // docker container name, e.g. commsoft-system
 }
 
 // Config is the deployment descriptor loaded from a YAML file.
 type Config struct {
-	JarDir   string    `yaml:"jarDir"` // where deployed jars live, default /data/cst/app/jar
-	TmpDir   string    `yaml:"tmpDir"` // where freshly uploaded jars wait, default /tmp
-	Services []Service `yaml:"services"`
+	LocalJarDir string    `yaml:"localJarDir"` // local staging folder for built jars
+	JarDir      string    `yaml:"jarDir"`      // remote deployed jars, default /data/cst/app/jar
+	TmpDir      string    `yaml:"tmpDir"`      // unused leftover; kept for older configs
+	Services    []Service `yaml:"services"`
 }
 
 // DefaultConfigPath returns ~/.config/cst-cli/deploy.yaml.
@@ -47,6 +53,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	if c.LocalJarDir == "" {
+		c.LocalJarDir = DefaultLocalJarDir
+	}
 	if c.JarDir == "" {
 		c.JarDir = "/data/cst/app/jar"
 	}
@@ -57,6 +66,15 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("no services defined in %s", path)
 	}
 	return &c, nil
+}
+
+// ResolveLocalJarDir returns the expanded local staging folder.
+func ResolveLocalJarDir(c *Config) string {
+	dir := DefaultLocalJarDir
+	if c != nil && c.LocalJarDir != "" {
+		dir = c.LocalJarDir
+	}
+	return jars.ExpandHome(dir)
 }
 
 // MatchServices maps jar file names to services, preserving jarNames order

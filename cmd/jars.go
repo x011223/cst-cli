@@ -15,7 +15,7 @@ var jarsCmd = &cobra.Command{
 	Long: `Scans Maven projects in the current directory, finds the built artifacts under
 each project's target/ directory (skipping repackaged originals and attached
 sources/tests jars), and copies them to the destination (default ~/Documents/Jars/).
-Only jars matching the pattern (default *-application-*.jar) are listed; select
+Only jars matching the pattern (default *-application*.jar) are listed; select
 the ones to copy interactively.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return tui.RunJars(jarsDest, jarsPattern)
@@ -24,5 +24,5 @@ the ones to copy interactively.`,
 
 func init() {
 	jarsCmd.Flags().StringVarP(&jarsDest, "dest", "d", "~/Documents/Jars/", "destination directory for collected jars")
-	jarsCmd.Flags().StringVarP(&jarsPattern, "pattern", "p", "", "jar name pattern to include, comma-separated (default *-application-*.jar)")
+	jarsCmd.Flags().StringVarP(&jarsPattern, "pattern", "p", "", "jar name pattern to include, comma-separated (default *-application*.jar)")
 }

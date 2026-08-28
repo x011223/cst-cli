@@ -2,6 +2,16 @@ package deploy
 
 import "testing"
 
+func TestResolveLocalJarDir(t *testing.T) {
+	if got := ResolveLocalJarDir(nil); got == "" || got[0] == '~' {
+		t.Fatalf("nil config should expand home, got %q", got)
+	}
+	cfg := &Config{LocalJarDir: "/tmp/cst-jars"}
+	if got := ResolveLocalJarDir(cfg); got != "/tmp/cst-jars" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestMatchServices(t *testing.T) {
 	cfg := &Config{Services: []Service{
 		{Name: "system", Jar: "system-application-2.0.0.jar", Container: "commsoft-system"},

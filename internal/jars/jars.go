@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -88,7 +89,10 @@ func isDeployableJar(n string) bool {
 }
 
 // DefaultJarPattern selects the deployable application artifacts by convention.
-var DefaultJarPattern = "*-application-*.jar"
+var DefaultJarPattern = "*-application*.jar"
+
+// ApplicationJarPattern is what `cst-cli mvn` copies into the staging folder.
+var ApplicationJarPattern = "*-application*.jar"
 
 // ParsePatterns splits a comma-separated pattern string into trimmed non-empty parts.
 func ParsePatterns(s string) []string {
@@ -152,6 +156,66 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Sync()
+}
+
+// ListDir returns jar files sitting directly in dir (non-recursive).
+func ListDir(dir string) ([]JarFile, error) {
+	dir = ExpandHome(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []JarFile
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasSuffix(n, ".jar") {
+			continue
+		}
+		out = append(out, JarFile{
+			Path: filepath.Join(dir, n),
+			Name: n,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// ClearDir deletes files in dir (not subdirectories). It refuses to operate
+// on empty, root, or home paths.
+func ClearDir(dir string) error {
+	dir = ExpandHome(dir)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if abs == "" || abs == "/" || abs == string(filepath.Separator) {
+		return fmt.Errorf("refusing to clear %s", abs)
+	}
+	if home, err := os.UserHomeDir(); err == nil && abs == home {
+		return fmt.Errorf("refusing to clear home directory %s", abs)
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(abs, 0o755)
+		}
+		return fmt.Errorf("read %s: %w", abs, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(abs, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ExpandHome expands a leading ~ to the user's home directory.

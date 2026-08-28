@@ -22,7 +22,11 @@ lets you select one or more, then builds each with:
 The environment (dev/prod/...) is passed to Maven as the active profile (-P),
 which only swaps injected config values (e.g. nacos addresses). Selected projects
 build in parallel; the three phases run serially within a project. Failures are
-reported with the Maven error output.`,
+reported with the Maven error output.
+
+Before each build the local staging folder (localJarDir in
+~/.config/cst-cli/deploy.yaml) is cleared. After a successful package, jars
+matching *-application*.jar are copied there for ` + "`cst-cli deploy`" + `.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return tui.RunMvnBuild(mvnEnv)
 	},
