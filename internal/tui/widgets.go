@@ -58,3 +58,28 @@ func CheckBox(selected bool) string {
 	}
 	return dimStyle("[ ]")
 }
+
+// padRight right-pads s to the given visible width, ignoring ANSI sequences.
+func padRight(s string, width int) string {
+	n := lipgloss.Width(s)
+	if n >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-n)
+}
+
+func maxVisible(ss ...string) int {
+	m := 0
+	for _, s := range ss {
+		if n := lipgloss.Width(s); n > m {
+			m = n
+		}
+	}
+	return m
+}
+
+// tableRow joins cells with two spaces and a trailing newline. Newlines must
+// not appear inside styled cells (lipgloss would pad the next line).
+func tableRow(cells ...string) string {
+	return strings.Join(cells, "  ") + "\n"
+}

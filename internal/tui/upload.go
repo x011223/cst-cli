@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/wujunqiang/cst-cli/internal/deploy"
 	"github.com/wujunqiang/cst-cli/internal/jars"
@@ -439,10 +440,7 @@ func (m umodel) uViewConfirmRestart() string {
 	b.WriteString(titleStyle("Restart docker services?") + "\n")
 	b.WriteString(restartRecordLine(0, 0, len(m.toRestart)) + "\n")
 	b.WriteString(dimStyle(fmt.Sprintf("one at a time on %s, wait %s after each", m.env.Host, upload.RestartPause)) + "\n\n")
-	for i, s := range m.toRestart {
-		idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, len(m.toRestart)))
-		b.WriteString(fmt.Sprintf(" %s %s  %s\n", idx, projStyle(s.Name), dimStyle("docker restart "+s.Container)))
-	}
+	b.WriteString(renderRestartRows(restartRowSpecs(m.toRestart, nil, nil)))
 	if len(m.unmatched) > 0 {
 		b.WriteString("\n" + dimStyle("no mapping in deploy.yaml:") + "\n")
 		for _, name := range m.unmatched {
@@ -459,9 +457,10 @@ func (m umodel) uViewRestarting() string {
 	b.WriteString(titleStyle("Restarting docker") + "  " + ProgressBar(ok+fail, total, 24) + "\n")
 	b.WriteString(restartRecordLine(ok, fail, total) + "\n")
 	b.WriteString(dimStyle(fmt.Sprintf("on %s@%s — one at a time, wait %s after each", m.env.User, m.env.Host, upload.RestartPause)) + "\n\n")
+	specs := make([]restartRow, len(m.rstStatuses))
 	for i, st := range m.rstStatuses {
-		icon := " "
 		label := dimStyle("pending")
+		icon := dimStyle("·")
 		switch {
 		case st.failed:
 			icon = failStyle("✗")
@@ -476,9 +475,16 @@ func (m umodel) uViewRestarting() string {
 			icon = runningStyle("●")
 			label = runningStyle("docker restart")
 		}
-		idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, total))
-		b.WriteString(fmt.Sprintf(" %s %s %-24s %s  %s\n", idx, icon, projStyle(st.svc.Name), dimStyle(st.svc.Container), label))
+		specs[i] = restartRow{
+			index:     i + 1,
+			total:     total,
+			icon:      icon,
+			name:      st.svc.Name,
+			container: st.svc.Container,
+			extra:     label,
+		}
 	}
+	b.WriteString(renderRestartRows(specs))
 	b.WriteString("\n" + helpStyle("Please wait…") + "\n")
 	return b.String()
 }
@@ -527,15 +533,18 @@ func (m umodel) uViewDone() string {
 		}
 		b.WriteString(titleStyle("Docker restart") + "\n")
 		b.WriteString(restartRecordLine(rok, rfail, len(m.rstResults)) + "\n\n")
-		total := len(m.toRestart)
-		for i, s := range m.toRestart {
-			idx := dimStyle(fmt.Sprintf("[%d/%d]", i+1, total))
+		extras := make([]string, len(m.toRestart))
+		icons := make([]string, len(m.toRestart))
+		for i := range m.toRestart {
 			if i < len(m.rstResults) && m.rstResults[i] != nil {
-				b.WriteString(fmt.Sprintf(" %s %s  %s  %s\n", idx, failStyle("✗ "+s.Name), dimStyle("docker restart "+s.Container), m.rstResults[i].Error()))
+				icons[i] = failStyle("✗")
+				extras[i] = failStyle(m.rstResults[i].Error())
 			} else {
-				b.WriteString(fmt.Sprintf(" %s %s  %s\n", idx, successStyle("✓ "+s.Name), dimStyle("docker restart "+s.Container)))
+				icons[i] = successStyle("✓")
+				extras[i] = successStyle("restarted")
 			}
 		}
+		b.WriteString(renderRestartRows(restartRowSpecs(m.toRestart, icons, extras)))
 	}
 	if len(m.unmatched) > 0 {
 		b.WriteString("\n" + dimStyle("uploaded but no mapping in deploy.yaml:") + "\n")
@@ -582,6 +591,67 @@ func restartRecordLine(ok, fail, total int) string {
 		style = dimStyle
 	}
 	return titleStyle("重启记录") + "  " + style(line)
+}
+
+type restartRow struct {
+	index     int
+	total     int
+	icon      string
+	name      string
+	container string
+	extra     string
+}
+
+func restartRowSpecs(svcs []deploy.Service, icons, extras []string) []restartRow {
+	rows := make([]restartRow, len(svcs))
+	for i, s := range svcs {
+		icon := dimStyle("●")
+		if i < len(icons) && icons[i] != "" {
+			icon = icons[i]
+		}
+		extra := ""
+		if i < len(extras) {
+			extra = extras[i]
+		}
+		rows[i] = restartRow{
+			index:     i + 1,
+			total:     len(svcs),
+			icon:      icon,
+			name:      s.Name,
+			container: s.Container,
+			extra:     extra,
+		}
+	}
+	return rows
+}
+
+func renderRestartRows(rows []restartRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	idxW := lipgloss.Width(fmt.Sprintf("%d/%d", rows[0].total, rows[0].total))
+	iconW := 1
+	nameW := 0
+	actW := 0
+	for _, r := range rows {
+		iconW = max(iconW, lipgloss.Width(r.icon))
+		nameW = max(nameW, lipgloss.Width(r.name))
+		actW = max(actW, lipgloss.Width("docker restart "+r.container))
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		idx := padRight(dimStyle(fmt.Sprintf("%d/%d", r.index, r.total)), idxW)
+		icon := padRight(r.icon, iconW)
+		name := padRight(projStyle(r.name), nameW)
+		act := padRight(dimStyle("docker restart "+r.container), actW)
+		b.WriteString("  ")
+		if r.extra != "" {
+			b.WriteString(tableRow(idx, icon, name, act, r.extra))
+		} else {
+			b.WriteString(tableRow(idx, icon, name, act))
+		}
+	}
+	return b.String()
 }
 
 type upFileStatus struct {
