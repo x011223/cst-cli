@@ -77,6 +77,20 @@ func ResolveLocalJarDir(c *Config) string {
 	return jars.ExpandHome(dir)
 }
 
+// JarNames returns the jar file names listed in services.
+func (c *Config) JarNames() []string {
+	if c == nil {
+		return nil
+	}
+	out := make([]string, 0, len(c.Services))
+	for _, s := range c.Services {
+		if s.Jar != "" {
+			out = append(out, s.Jar)
+		}
+	}
+	return out
+}
+
 // MatchServices maps jar file names to services, preserving jarNames order
 // and skipping duplicate containers. Jars with no matching service are
 // returned in unmatched.

@@ -26,7 +26,7 @@ reported with the Maven error output.
 
 Before each build the local staging folder (localJarDir in
 ~/.config/cst-cli/deploy.yaml) is cleared. After a successful package, jars
-matching *-application*.jar are copied there for ` + "`cst-cli deploy`" + `.`,
+whose names match a service in that YAML are copied there for ` + "`cst-cli deploy`" + `.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return tui.RunMvnBuild(mvnEnv)
 	},

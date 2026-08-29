@@ -127,6 +127,24 @@ func FilterByName(in []JarFile, patterns []string) []JarFile {
 	return out
 }
 
+// FilterExact keeps only jars whose Name equals one of the given names.
+func FilterExact(in []JarFile, names []string) []JarFile {
+	if len(names) == 0 {
+		return nil
+	}
+	want := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		want[n] = struct{}{}
+	}
+	var out []JarFile
+	for _, j := range in {
+		if _, ok := want[j.Name]; ok {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
 // CopyJars copies every jar into dst, creating dst if needed. It overwrites
 // existing files in dst with the same name.
 func CopyJars(jars []JarFile, dst string) ([]CopyResult, error) {

@@ -50,6 +50,7 @@ type model struct {
 	localJarDir string
 	copyResults []jars.CopyResult
 	copyErr     error
+	deployCfg   *deploy.Config
 	ch          chan tea.Msg
 	err         error
 }
@@ -100,7 +101,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// results arrive on the main goroutine, so the done view can rely on
 		// m.results being fully populated.
 		m.results = msg.results
-		m.copyResults, m.copyErr = stageBuiltJars(msg.results, m.localJarDir)
+		m.copyResults, m.copyErr = stageBuiltJars(msg.results, m.localJarDir, m.deployCfg)
 		m.state = stateDone
 		return m, nil
 	case errMsg:
@@ -323,7 +324,7 @@ func (m model) viewDone() string {
 	case m.copyErr != nil:
 		b.WriteString(failStyle("Copy to staging failed: ") + m.copyErr.Error() + "\n")
 	case len(m.copyResults) == 0:
-		b.WriteString(dimStyle(fmt.Sprintf("No *-application*.jar copied to %s", m.localJarDir)) + "\n")
+		b.WriteString(dimStyle(fmt.Sprintf("No jars matching deploy.yaml copied to %s", m.localJarDir)) + "\n")
 	default:
 		okc, failc := 0, 0
 		for _, r := range m.copyResults {
@@ -461,6 +462,7 @@ func RunMvnBuild(env string) error {
 	m := initialModel(env)
 	m.projects = projects
 	dcfg, _ := deploy.LoadConfig("")
+	m.deployCfg = dcfg
 	m.localJarDir = deploy.ResolveLocalJarDir(dcfg)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -468,18 +470,18 @@ func RunMvnBuild(env string) error {
 	return err
 }
 
-func stageBuiltJars(results []maven.BuildResult, dest string) ([]jars.CopyResult, error) {
+func stageBuiltJars(results []maven.BuildResult, dest string, cfg *deploy.Config) ([]jars.CopyResult, error) {
 	var ok []maven.Project
 	for _, r := range results {
 		if r.FailedAt == "" {
 			ok = append(ok, r.Project)
 		}
 	}
-	if len(ok) == 0 {
+	if len(ok) == 0 || cfg == nil {
 		return nil, nil
 	}
 	found := jars.FindJars(toJarsProjects(ok))
-	found = jars.FilterByName(found, jars.ParsePatterns(jars.ApplicationJarPattern))
+	found = jars.FilterExact(found, cfg.JarNames())
 	if len(found) == 0 {
 		return nil, nil
 	}

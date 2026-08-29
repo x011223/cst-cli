@@ -35,3 +35,17 @@ func TestMatchServices(t *testing.T) {
 		t.Fatalf("order = %s, %s; want notify, system", matched[0].Name, matched[1].Name)
 	}
 }
+
+func TestJarNames(t *testing.T) {
+	cfg := &Config{Services: []Service{
+		{Name: "auth", Jar: "commsoft-auth.jar"},
+		{Name: "system", Jar: "system-application-2.0.0.jar"},
+	}}
+	got := cfg.JarNames()
+	if len(got) != 2 || got[0] != "commsoft-auth.jar" || got[1] != "system-application-2.0.0.jar" {
+		t.Fatalf("JarNames = %v", got)
+	}
+	if (*Config)(nil).JarNames() != nil {
+		t.Fatal("nil config should return nil")
+	}
+}
