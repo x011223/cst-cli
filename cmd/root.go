@@ -23,6 +23,7 @@ func init() {
 	rootCmd.AddCommand(mvnCmd)
 	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(deployCmd)
+	rootCmd.AddCommand(dockerCmd)
 	rootCmd.AddCommand(jarsCmd)
 	rootCmd.AddCommand(versionCmd)
 }

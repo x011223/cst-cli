@@ -68,6 +68,22 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-n)
 }
 
+// clipWidth shortens s to the given visible width, appending an ellipsis.
+func clipWidth(s string, width int) string {
+	if width <= 1 || lipgloss.Width(s) <= width {
+		return s
+	}
+	w := 0
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > width-1 {
+			return s[:i] + "…"
+		}
+		w += rw
+	}
+	return s
+}
+
 func maxVisible(ss ...string) int {
 	m := 0
 	for _, s := range ss {

@@ -254,6 +254,10 @@ func validContainerName(name string) bool {
 	return true
 }
 
+func (e Environment) Dial() (*ssh.Client, error) {
+	return e.dial()
+}
+
 func (e Environment) dial() (*ssh.Client, error) {
 	cfg := &ssh.ClientConfig{
 		User: e.User,
