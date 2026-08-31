@@ -12,7 +12,8 @@
 | deploy 重启间隔 / 串行策略 | `RestartPause`、`RestartContainers` |
 | docker 成功文案 / 超时 | [internal/docker/docker.go](../../internal/docker/docker.go) `SuccessMarker`, `DefaultLogTimeout` |
 | docker 分组 UI / 分栏日志 | [internal/tui/docker.go](../../internal/tui/docker.go) |
-| YAML 字段 | [internal/deploy/config.go](../../internal/deploy/config.go), [internal/upload/upload.go](../../internal/upload/upload.go) `Environment` |
+| 上传目录 | [internal/upload/upload.go](../../internal/upload/upload.go) `Environment.DestDir`（`servers.yaml`，按环境） |
+| YAML 字段 | [internal/deploy/config.go](../../internal/deploy/config.go)（暂存+映射）, [internal/upload/upload.go](../../internal/upload/upload.go) `Environment` |
 | 进度条、对齐、截断 | [internal/tui/widgets.go](../../internal/tui/widgets.go) |
 | 颜色 | [internal/tui/styles.go](../../internal/tui/styles.go) |
 
