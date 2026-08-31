@@ -14,7 +14,7 @@
 | `port` | SSH 端口 | `22` |
 | `user` | SSH 用户 | — |
 | `password` | 密码（同时用于 keyboard-interactive） | — |
-| `destDir` | SFTP 上传目录 | `/tmp` |
+| `destDir` | 该环境的 SFTP 上传目录（不同环境可以不同） | `/tmp` |
 
 占位示例（值请换成自己的，勿提交）：
 
@@ -28,7 +28,7 @@ environments:
     destDir: /data/cst/app/jar
 ```
 
-`deploy` 与 `docker` 共用这份文件。
+`deploy` 与 `docker` 共用这份文件。上传目录只用这里的 `destDir`，按环境区分。
 
 ## deploy.yaml
 
@@ -37,13 +37,11 @@ environments:
 | 字段 | 含义 | 默认 |
 | --- | --- | --- |
 | `localJarDir` | 本机暂存目录（`mvn` 写入、`deploy` 读取） | `~/Documents/Jars` |
-| `jarDir` | 远程已部署 jar 目录（解析后写入 Config；当前上传实际用 `servers.yaml` 的 `destDir`） | `/data/cst/app/jar` |
-| `tmpDir` | 注释写明 unused leftover，兼容旧文件 | `/tmp` |
 | `services[].name` | 展示名 | — |
 | `services[].jar` | 精确 jar 文件名（`mvn` 拷贝、`deploy` 映射） | — |
 | `services[].container` | 远程 Docker 容器名 | — |
 
-`MatchServices` 按 jar 名匹配，跳过重复 container，未匹配的 jar 进入 `unmatched`。
+`MatchServices` 按 jar 名匹配，跳过重复 container，未匹配的 jar 进入 `unmatched`。旧文件里的 `jarDir` / `tmpDir` 会被忽略，上传路径只看各环境 `destDir`。
 
 占位示例：
 

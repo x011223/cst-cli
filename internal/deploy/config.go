@@ -1,5 +1,6 @@
-// Package deploy loads the deployment descriptor: local staging folder,
-// jar-to-container mapping, and remote paths.
+// Package deploy loads the deployment descriptor: local staging folder
+// and jar-to-container mapping. Remote upload path is per-environment destDir
+// in servers.yaml, not this file.
 package deploy
 
 import (
@@ -26,8 +27,6 @@ type Service struct {
 // Config is the deployment descriptor loaded from a YAML file.
 type Config struct {
 	LocalJarDir string    `yaml:"localJarDir"` // local staging folder for built jars
-	JarDir      string    `yaml:"jarDir"`      // remote deployed jars, default /data/cst/app/jar
-	TmpDir      string    `yaml:"tmpDir"`      // unused leftover; kept for older configs
 	Services    []Service `yaml:"services"`
 }
 
@@ -55,12 +54,6 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.LocalJarDir == "" {
 		c.LocalJarDir = DefaultLocalJarDir
-	}
-	if c.JarDir == "" {
-		c.JarDir = "/data/cst/app/jar"
-	}
-	if c.TmpDir == "" {
-		c.TmpDir = "/tmp"
 	}
 	if len(c.Services) == 0 {
 		return nil, fmt.Errorf("no services defined in %s", path)

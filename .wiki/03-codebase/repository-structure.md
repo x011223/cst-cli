@@ -1,6 +1,6 @@
 # 仓库结构
 
-单模块 Go 仓库，无前端、无 `docs/`、无 `wiki/` 以外的文档树（本 Wiki 为后补）。
+单模块 Go 仓库，无前端、无 `docs/`、无 `.wiki/` 以外的文档树（本 Wiki 为后补）。
 
 ```text
 cst-cli/
@@ -22,7 +22,7 @@ cst-cli/
 │   ├── upload/             servers.yaml、SFTP、串行重启
 │   ├── docker/             远程 docker 列表与跟日志重启
 │   └── git/                多仓 status + 变更树
-└── wiki/                   本 Wiki
+└── .wiki/                  本 Wiki
 ```
 
 ## 有意不存在的内容
