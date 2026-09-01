@@ -6,7 +6,7 @@
 
 - 选 profile（`dev` / `test` / `prod`）→ 多选一层子目录 Maven 项目
 - Enter 前清空 `localJarDir`（[internal/tui/mvn.go](../../internal/tui/mvn.go)）
-- 项目并行、每项目 `clean → compile → package` 串行，命令为 `mvn -B [-P<env>] <phase>`
+- 项目并行、每项目 `clean → compile → package` 串行，命令为 `mvn -B [-P<env>] <phase>`；每个项目单独一块面板滚动 Maven 日志
 - 成功项目用 `jars.FilterExact(..., cfg.JarNames())` 拷到暂存目录；`deploy.yaml` 缺失则不拷
 
 ## deploy（别名 deloy / upload）

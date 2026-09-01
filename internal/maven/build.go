@@ -1,8 +1,11 @@
 package maven
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -37,10 +40,13 @@ type BuildResult struct {
 // RunBuilds runs the selected projects' builds. Projects run in parallel, and
 // within a project the three phases run serially. The given profile is passed
 // to Maven via -P (e.g. "dev"/"prod"); an empty profile activates the default.
-// Progress is reported via the onPhase callback (running=false with failed=true
-// means the phase errored, and out holds the Maven output); final results are
-// returned.
-func RunBuilds(projects []Project, profile string, onPhase func(projectIndex int, phase Phase, running bool, out string, failed bool), onDone func(projectIndex int)) []BuildResult {
+// Progress is reported via onPhase (running=false with failed=true means the
+// phase errored, and out holds the Maven output). onLine receives each stdout
+// or stderr line as Maven prints it. Final results are returned.
+func RunBuilds(ctx context.Context, projects []Project, profile string, onPhase func(projectIndex int, phase Phase, running bool, out string, failed bool), onLine func(projectIndex int, line string), onDone func(projectIndex int)) []BuildResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	results := make([]BuildResult, len(projects))
 	var wg sync.WaitGroup
 	for i, p := range projects {
@@ -49,8 +55,17 @@ func RunBuilds(projects []Project, profile string, onPhase func(projectIndex int
 			defer wg.Done()
 			res := BuildResult{Project: proj}
 			for _, phase := range Phases {
+				if ctx.Err() != nil {
+					res.FailedAt = phase
+					res.Results = append(res.Results, PhaseResult{Phase: phase, Err: ctx.Err(), Out: ctx.Err().Error()})
+					break
+				}
 				onPhase(idx, phase, true, "", false)
-				out, err := runMaven(proj.Path, string(phase), profile)
+				out, err := runMaven(ctx, proj.Path, string(phase), profile, func(line string) {
+					if onLine != nil {
+						onLine(idx, line)
+					}
+				})
 				failed := err != nil
 				res.Results = append(res.Results, PhaseResult{Phase: phase, Err: err, Out: out})
 				onPhase(idx, phase, false, out, failed)
@@ -68,21 +83,60 @@ func RunBuilds(projects []Project, profile string, onPhase func(projectIndex int
 }
 
 // runMaven executes `mvn -B [-P<profile>] <phase>` in the given project
-// directory and returns the combined output. On failure the output (including
-// the Maven error) is returned alongside the error so callers can display it.
-func runMaven(dir, phase, profile string) (string, error) {
+// directory and streams combined output line by line. On failure the full
+// output is still returned alongside the error.
+func runMaven(ctx context.Context, dir, phase, profile string, onLine func(string)) (string, error) {
 	args := []string{"-B"}
 	if profile != "" {
 		args = append(args, "-P"+profile)
 	}
 	args = append(args, phase)
-	cmd := exec.Command("mvn", args...)
+	cmd := exec.CommandContext(ctx, "mvn", args...)
 	cmd.Dir = dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
+	var mu sync.Mutex
+	write := func(line string) {
+		mu.Lock()
+		buf.WriteString(line)
+		buf.WriteByte('\n')
+		mu.Unlock()
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go func() {
+		defer readers.Done()
+		scanLines(stdout, write)
+	}()
+	go func() {
+		defer readers.Done()
+		scanLines(stderr, write)
+	}()
+	err = cmd.Wait()
+	readers.Wait()
 	return buf.String(), err
+}
+
+func scanLines(r io.Reader, write func(string)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		write(sc.Text())
+	}
 }
 
 // FormatResult builds a human-readable summary for a single build result.

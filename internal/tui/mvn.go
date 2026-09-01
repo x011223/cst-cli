@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -51,12 +52,16 @@ type model struct {
 	copyResults []jars.CopyResult
 	copyErr     error
 	deployCfg   *deploy.Config
+	logs        [][]string
+	width       int
+	height      int
+	cancel      context.CancelFunc
 	ch          chan tea.Msg
 	err         error
 }
 
 func initialModel(env string) model {
-	m := model{selected: map[int]bool{}, env: env}
+	m := model{selected: map[int]bool{}, env: env, width: 80, height: 24}
 	if env != "" {
 		m.state = stateSelect // preset env, skip the env screen
 	} else {
@@ -69,17 +74,35 @@ func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
 	case tea.KeyMsg:
 		switch m.state {
 		case stateEnv:
 			return m.updateEnv(msg)
 		case stateSelect:
 			return m.updateSelect(msg)
+		case stateRunning:
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			}
 		case stateDone:
 			if msg.String() == "q" || msg.String() == "ctrl+c" || msg.String() == "esc" {
 				return m, tea.Quit
 			}
 		}
+	case logMsg:
+		if msg.idx >= 0 && msg.idx < len(m.logs) {
+			m.logs[msg.idx] = append(m.logs[msg.idx], msg.line)
+			if len(m.logs[msg.idx]) > 300 {
+				m.logs[msg.idx] = m.logs[msg.idx][len(m.logs[msg.idx])-200:]
+			}
+		}
+		return m, m.listen()
 	case phaseMsg:
 		st := &m.statuses[msg.idx]
 		st.phase = msg.phase
@@ -177,14 +200,23 @@ func (m model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) startBuilds(chosen []maven.Project) (tea.Model, tea.Cmd) {
 	m.state = stateRunning
 	m.statuses = make([]projectStatus, len(chosen))
+	m.logs = make([][]string, len(chosen))
 	for i, p := range chosen {
 		m.statuses[i] = projectStatus{name: p.Name}
 	}
-	m.ch = make(chan tea.Msg, 64)
+	m.ch = make(chan tea.Msg, 4096)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
 	go func() {
-		results := maven.RunBuilds(chosen, m.env,
+		results := maven.RunBuilds(ctx, chosen, m.env,
 			func(idx int, phase maven.Phase, running bool, out string, failed bool) {
 				m.ch <- phaseMsg{idx: idx, phase: phase, running: running, failed: failed}
+			},
+			func(idx int, line string) {
+				select {
+				case m.ch <- logMsg{idx: idx, line: line}:
+				default:
+				}
 			},
 			func(idx int) {
 				m.ch <- doneMsg{idx: idx}
@@ -264,12 +296,83 @@ func (m model) viewRunning() string {
 	total := len(m.statuses)
 	var b strings.Builder
 	b.WriteString(titleStyle("Building") + "  " + ProgressBar(m.doneCnt, total, 24) + "\n")
-	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   Overall: %d/%d projects complete", m.env, m.doneCnt, total)) + "\n\n")
-	for _, st := range m.statuses {
-		b.WriteString(fmt.Sprintf(" %s %-26s %s %s\n", iconFor(st), projStyle(st.name), ProgressBar(st.completed, len(maven.Phases), 10), labelFor(st)))
+	b.WriteString(dimStyle(fmt.Sprintf("env: %s   ·   %d/%d projects complete  ·  one log pane per project", m.env, m.doneCnt, total)) + "\n")
+
+	avail := m.height - 3
+	if avail < 6 {
+		avail = 6
 	}
-	b.WriteString("\n" + helpStyle("Press q to quit.") + "\n")
+	n := total
+	if n < 1 {
+		n = 1
+	}
+	paneH := avail / n
+	if paneH < 3 {
+		paneH = 3
+	}
+	extra := avail - paneH*n
+	if extra < 0 {
+		extra = 0
+	}
+	logW := m.width - 4
+	if logW < 16 {
+		logW = 16
+	}
+	for i, st := range m.statuses {
+		h := paneH
+		if extra > 0 {
+			h++
+			extra--
+		}
+		b.WriteString(m.renderBuildPane(i, st, h, logW))
+	}
+	b.WriteString(helpStyle("q quit") + "\n")
 	return b.String()
+}
+
+func (m model) renderBuildPane(i int, st projectStatus, height, logW int) string {
+	var b strings.Builder
+	b.WriteString(" " + iconFor(st) + " " + projStyle(st.name) + "  " +
+		ProgressBar(st.completed, len(maven.Phases), 10) + "  " + labelFor(st) + "\n")
+	logH := height - 1
+	if logH < 1 {
+		logH = 1
+	}
+	var lines []string
+	if i < len(m.logs) {
+		lines = m.logs[i]
+	}
+	bar := dimStyle("│")
+	if len(lines) == 0 {
+		b.WriteString(" " + bar + " " + dimStyle("waiting for Maven output…") + "\n")
+		for j := 1; j < logH; j++ {
+			b.WriteString(" " + bar + "\n")
+		}
+		return b.String()
+	}
+	if len(lines) > logH {
+		lines = lines[len(lines)-logH:]
+	}
+	for _, line := range lines {
+		b.WriteString(" " + bar + " " + styleMavenLine(clipWidth(line, logW)) + "\n")
+	}
+	for j := len(lines); j < logH; j++ {
+		b.WriteString(" " + bar + "\n")
+	}
+	return b.String()
+}
+
+func styleMavenLine(line string) string {
+	switch {
+	case strings.Contains(line, "BUILD SUCCESS"):
+		return successStyle(line)
+	case strings.Contains(line, "BUILD FAILURE") || strings.HasPrefix(strings.TrimSpace(line), "[ERROR]"):
+		return failStyle(line)
+	case strings.HasPrefix(strings.TrimSpace(line), "[WARNING]"):
+		return runningStyle(line)
+	default:
+		return dimStyle(line)
+	}
 }
 
 func (m model) viewDone() string {
@@ -377,6 +480,11 @@ func labelFor(st projectStatus) string {
 	default:
 		return dimStyle("pending")
 	}
+}
+
+type logMsg struct {
+	idx  int
+	line string
 }
 
 type phaseMsg struct {

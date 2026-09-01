@@ -13,7 +13,7 @@ cst-cli mvn [-e dev]
        → TUI: 选 env / 选项目
        → jars.ClearDir(localJarDir)
        → maven.RunBuilds(projects, profile)
-            → exec mvn -B [-Pprofile] clean|compile|package
+            → exec mvn -B [-Pprofile] clean|compile|package（按行回传日志）
        → stageBuiltJars
             → jars.FindJars(成功项目)
             → jars.FilterExact(..., deployCfg.JarNames())
